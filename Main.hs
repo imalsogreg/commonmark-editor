@@ -1,15 +1,12 @@
 
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 
 module Main where
 
--- import Reflex.Dom.Main
-import Reflex.Dom (mainWidgetWithHead, MonadWidget, text, mainWidget)
-import Commonmark.Editor
+import           Commonmark.Editor
+import           Reflex.Dom        (MonadWidget, mainWidget, mainWidgetWithHead,
+                                    text)
 
 main :: IO ()
-main = mainWidgetWithHead header $ do
-  updates <- editor
-  viewer (ViewerConfig ((1,) <$> updates))
-  return ()
+main = mainWidgetWithHead header mainApp

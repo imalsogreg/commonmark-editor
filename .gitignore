@@ -3,6 +3,6 @@
 *.log
 tmp/
 
-
+Setup.hs
 dist-newstyle
 dist

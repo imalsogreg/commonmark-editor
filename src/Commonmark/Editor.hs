@@ -43,12 +43,14 @@ customSyntax = mconcat
 
 editor :: forall t m.(DomBuilder t m) => m (Event t Text.Text)
 editor = divClass "commonmark-editor" $ do
-  te <- textAreaElement $ def
+  te <- textAreaElement $
+        def & textAreaElementConfig_elementConfig . elementConfig_initialAttributes .~
+        ("rows" =: "20")
   return $ _textAreaElement_input te
 
 
-data ViewerConfig t f = ViewerConfig
-  { renderMarkdown :: Event t (f Text.Text)
+data ViewerConfig t = ViewerConfig
+  { renderMarkdown :: Event t Text.Text
   }
 
 
@@ -56,8 +58,8 @@ data ViewerConfig t f = ViewerConfig
 -- that indicates click events on the render result. We could catch
 -- these clicks to place the cursor at the corresponding part of
 -- the comment editor. Not implemented.
-data Viewer t f = Viewer
-  { renders :: Event t (f (Commonmark.Html Commonmark.SourceRange))
+data Viewer t = Viewer
+  { renders :: Event t (Commonmark.Html Commonmark.SourceRange)
   }
 
 render
@@ -84,18 +86,15 @@ viewer
    , IO.MonadIO (Performable m)
    , JSaddle.MonadJSM (Performable m)
    )
-  => ViewerConfig t ((,) Int)
-  -> m (Viewer t ((,) Int))
-viewer ViewerConfig{renderMarkdown} = do
-  let
-    html =
-      ffor renderMarkdown (\(renderId, markdown) -> render markdown)
-  -- afterRender <- throttle 0.05 =<< delay 0.2 renderMarkdown
-
+  => ViewerConfig t
+  -> m (Viewer t)
+viewer ViewerConfig{renderMarkdown} = divClass "commonmark-viewer" $ do
+  -- TODO: debounce? throttle?
+  html <- (fmap.fmap)  render $ debounce 0.5 =<< throttle 0.2 renderMarkdown
   numberedHtmls <- numberOccurrences html
   let
 
-    drawIt (Right r) = do
+    drawFrame (Right r) = do
       pb <- getPostBuild
       startTypeset <- delay 0.1 pb
       finishTypeset <- performEvent $
@@ -106,19 +105,19 @@ viewer ViewerConfig{renderMarkdown} = do
         )
       hidden <- holdDyn True (False <$ finishTypeset)
       let attrs = ffor hidden $ \b ->
-            ("class" =: "frame fade-in" <> "style" =: "background-color:white;") <>
+            ("class" =: "frame fade-in" <> "style" =: "background-color:white; width:100%;") <>
             (if False then ("hidden" =: "") else mempty)
       elDynAttr "div" attrs $
         toReflexDom (const (return ())) r
-    drawIt _ = text "render error" >> return never
+    drawFrame _ = text "render error" >> return never
 
     adjustments = ffor numberedHtmls $ \(i,r) ->
-      i =: Just (drawIt r)
+      i =: Just (drawFrame r)
       <> (i-2) =: Nothing
 
   stack <- elAttr "div" ("class" =: "frame-stack" <> "style" =: "position:relative;") $ do
     el "style" (text ".fade-in { animation: fadeIn ease 1s; }")
-    el "style" (text ".frame { position: absolute; left: 0px; top: 0px; width: 100px; }")
+    el "style" (text ".frame { position: absolute; left: 0px; top: 0px;  }")
     el "style" (text "@keyframes fadeIn { 0% {opacity:0;}\n 100% {opacity:1}\n}")
     listWithKeyShallowDiff mempty adjustments (\k v _ -> v)
 
@@ -140,7 +139,7 @@ toReflexDom domPrefix node = case node of
   Commonmark.HtmlRaw t ->
     domPrefix "raw: " >> text (t) >> return never
   Commonmark.HtmlText t ->
-    domPrefix "text: " >> text (escapeHtml t) >> return never
+    domPrefix "text: " >> text (t) >> return never
   Commonmark.HtmlElement eltType tagname attrs mbcontents -> do
     domPrefix "element: "
     -- case lookup "xmlns" attrs of
@@ -152,36 +151,20 @@ toReflexDom domPrefix node = case node of
         Just c  -> toReflexDom domPrefix c
     return never
 
+
 #ifndef ghcjs_HOST_OS
-myMain
-  :: forall t m
-  . ( DomBuilder t m
-    , TriggerEvent t m
-    , PerformEvent t m
-    , IO.MonadIO m
-    , IO.MonadIO (Performable m)
-    , PostBuild t m
-    , MonadHold t m
-    , Fix.MonadFix m
-    , JSaddle.MonadJSM (Performable m)
-    ) => m ()
-myMain = divClass "content" $ do
-  updates <- editor
-  v <- viewer (ViewerConfig ((1,) <$> updates))
-  -- text "ampersand: &"
-  return ()
-
-
-
-debug = JSaddle.debug 8080 (mainWidgetWithHead header myMain)
+debug = JSaddle.debug 8080 (mainWidgetWithHead header mainApp)
 #endif
 
 header :: DomBuilder t m => m ()
-header = elAttr "script"
-         ("id" =: "MathJax-script"
-          <> "async" =: ""
-          <> "src" =: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
-         ) (return ())
+header = do
+  elAttr "script"
+    ("id" =: "MathJax-script"
+     <> "async" =: ""
+     <> "src" =: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+    ) (return ())
+  el "style" (text css)
+
 
 escapeHtml :: Text.Text -> Text.Text
 escapeHtml t =
@@ -199,3 +182,68 @@ escapeHtmlChar :: Char -> Text.Text
 escapeHtmlChar '<' = "&lt;"
 escapeHtmlChar '>' = "&gt;"
 escapeHtmlChar '&' = "&amp;"
+
+mainApp
+  :: forall t m
+  .( DomBuilder t m
+   , TriggerEvent t m
+   , PerformEvent t m
+   , MonadHold t m
+   , PostBuild t m
+   , IO.MonadIO m
+   , Fix.MonadFix m
+   , IO.MonadIO (Performable m)
+   , JSaddle.MonadJSM (Performable m)
+   )
+  => m ()
+mainApp = divClass "content" $ do
+  let grid r c = Text.concat
+        [ "grid-column-start: "
+        , c
+        , "; grid-column-end: span 1"
+        , "; grid-row-start: "
+        , r
+        , "; grid-row-end: span 1"
+        , ";"
+        ]
+  elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "1") (text "Markdown")
+  markdownUpdates <- elAttr "div"
+    ("class" =: "pad10" <>
+     "style" =: grid "2" "1"
+    ) $ editor
+  elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "2") (text "Rendered")
+  _ <- elAttr "div" ("class" =: "pad10" <> "style" =: grid "2" "2") $
+       viewer (ViewerConfig { renderMarkdown = markdownUpdates })
+  return ()
+
+viewerCss :: Text.Text
+viewerCss = mconcat
+  [ ".commonmark-viewer {"
+  , "  width:  100%;"
+  , "  height: 100%;"
+  , "}"
+  , "body {"
+  , "  background-color: hsla(0,0%,95%,1);"
+  , "}"
+  , ".pad10 {"
+  , "  padding: 10px;"
+  , "}"
+  ]
+
+editorCss :: Text.Text
+editorCss = mconcat
+  [ ".commonmark-editor {"
+  , "  width:  80%;"
+  , "  height: 100%;"
+  , "}"
+  , ".commonmark-editor > textarea {"
+  , "  width: 100%;"
+  , "}"
+  ]
+
+css :: Text.Text
+css = Text.unlines
+  [ ".content{"
+  , "  display: grid;"
+  , "}"
+  ] <> editorCss <> viewerCss
