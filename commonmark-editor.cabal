@@ -24,6 +24,8 @@ library
                , lens
                , async
                , jsaddle
+               , jsaddle-dom
+               , parsec
                , reflex-dom-core
                , stm
                , texmath

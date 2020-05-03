@@ -5,6 +5,7 @@
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE RecursiveDo         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE TypeApplications    #-}
@@ -13,6 +14,7 @@
 module Commonmark.Editor where
 
 import qualified Commonmark
+import qualified Data.Functor.Identity as Identity
 import qualified Commonmark.Extensions                  as Commonmark
 import qualified Commonmark.Html
 import qualified Control.Applicative                    as Applicative
@@ -27,6 +29,7 @@ import qualified Control.Monad.Fix                      as Fix
 import qualified Control.Monad.IO.Class                 as IO
 import qualified Data.Text                              as Text
 import qualified Data.Text.Lazy                         as T
+import qualified JSDOM.HTMLTextAreaElement              as DOM
 import qualified Language.Javascript.JSaddle            as JSaddle
 import           Reflex.Dom.Core
 
@@ -41,12 +44,62 @@ customSyntax = mconcat
   , Commonmark.defaultSyntaxSpec
   ]
 
-editor :: forall t m.(DomBuilder t m) => m (Event t Text.Text)
-editor = divClass "commonmark-editor" $ do
+data EditorConfig t = EditorConfig
+  { initialContent :: Text.Text
+  , sourceMap      :: Dynamic t Commonmark.SourceMap
+  }
+
+data Editor t = Editor
+  { contentUpdates :: Event t Text.Text
+  , cursorXY       :: Dynamic t (Int,Int)
+  , cursorN        :: Dynamic t Int
+  , keypresses     :: Event t Char
+  }
+
+editor
+  :: forall t m
+  .( DomBuilder t m
+   , PerformEvent t m
+   , DomBuilderSpace m ~ GhcjsDomSpace
+   , JSaddle.MonadJSM (Performable m)
+   , MonadHold t m
+   ) => EditorConfig t -> m (Editor t)
+editor EditorConfig {initialContent} = divClass "commonmark-editor" $ do
   te <- textAreaElement $
-        def & textAreaElementConfig_elementConfig . elementConfig_initialAttributes .~
-        ("rows" =: "20")
-  return $ _textAreaElement_input te
+        def & textAreaElementConfig_elementConfig
+              . elementConfig_initialAttributes
+              .~ ("rows" =: "20")
+            & textAreaElementConfig_initialValue
+              .~ initialContent
+  let
+    contentUpdates  = _textAreaElement_input te
+    textAreaElement = _textAreaElement_raw   te
+
+    motionEvents = leftmost [domEvent Click te, () <$ domEvent Keyup te]
+  content <- holdDyn initialContent contentUpdates
+  cursorN <- holdDyn 1 =<< performEvent
+    (ffor motionEvents $ \() -> JSaddle.liftJSM $
+                                DOM.getSelectionStart textAreaElement
+    )
+
+  let
+    pos2d t n = go 1 (Text.lines t) n
+      where go currentRow tLines currentCol =
+              case tLines of
+                []     -> (currentRow, currentCol)
+                (l:ls) -> if currentCol <= Text.length l
+                          then (currentRow, currentCol)
+                          else go (currentRow + 1) ls (currentCol - Text.length l - 1)
+
+    cursorXY = pos2d <$> content <*> cursorN
+    keypresses = fmap (toEnum . fromIntegral) (domEvent Keypress te)
+
+  return $ Editor
+    { contentUpdates
+    , cursorXY
+    , cursorN
+    , keypresses
+    }
 
 
 data ViewerConfig t = ViewerConfig
@@ -59,13 +112,14 @@ data ViewerConfig t = ViewerConfig
 -- these clicks to place the cursor at the corresponding part of
 -- the comment editor. Not implemented.
 data Viewer t = Viewer
-  { renders :: Event t (Commonmark.Html Commonmark.SourceRange)
+  { renders :: Event t (Commonmark.Html Commonmark.SourceRange, Commonmark.SourceMap)
   }
 
 render
   :: Text.Text
-  -> Either Commonmark.ParseError (Commonmark.Html Commonmark.SourceRange)
-render t = Monad.join $ Commonmark.commonmarkWith customSyntax "editor-text" t
+  -> Either Commonmark.ParseError (Commonmark.Html Commonmark.SourceRange, Commonmark.SourceMap)
+render t = -- Monad.join $ Commonmark.commonmarkWith customSyntax "editor-text" t
+  Commonmark.runWithSourceMap <$> Identity.runIdentity (Commonmark.parseCommonmarkWith customSyntax (Commonmark.tokenize "editor-text" t))
 
 
 -- | Viewer will do a MathJax.typeset() after each update.
@@ -94,7 +148,7 @@ viewer ViewerConfig{renderMarkdown} = divClass "commonmark-viewer" $ do
   numberedHtmls <- numberOccurrences html
   let
 
-    drawFrame (Right r) = do
+    drawFrame (Right (r,sm)) = do
       pb <- getPostBuild
       startTypeset <- delay 0.1 pb
       finishTypeset <- performEvent $
@@ -111,7 +165,7 @@ viewer ViewerConfig{renderMarkdown} = divClass "commonmark-viewer" $ do
         toReflexDom (const (return ())) r
     drawFrame _ = text "render error" >> return never
 
-    adjustments = ffor numberedHtmls $ \(i,r) ->
+    adjustments = ffor numberedHtmls $ \(i, r) ->
       i =: Just (drawFrame r)
       <> (i-2) =: Nothing
 
@@ -194,6 +248,7 @@ mainApp
    , Fix.MonadFix m
    , IO.MonadIO (Performable m)
    , JSaddle.MonadJSM (Performable m)
+   , DomBuilderSpace m ~ GhcjsDomSpace
    )
   => m ()
 mainApp = divClass "content" $ do
@@ -207,13 +262,19 @@ mainApp = divClass "content" $ do
         , ";"
         ]
   elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "1") (text "Markdown")
-  markdownUpdates <- elAttr "div"
-    ("class" =: "pad10" <>
-     "style" =: grid "2" "1"
-    ) $ editor
-  elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "2") (text "Rendered")
-  _ <- elAttr "div" ("class" =: "pad10" <> "style" =: grid "2" "2") $
-       viewer (ViewerConfig { renderMarkdown = markdownUpdates })
+  rec
+    Editor {contentUpdates} <- elAttr "div"
+      ("class" =: "pad10" <>
+       "style" =: grid "2" "1"
+      ) $ do
+      e <- editor (EditorConfig { initialContent = "", sourceMap })
+      display $ cursorN e
+      display $ cursorXY e
+      return e
+    elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "2") (text "Rendered")
+    Viewer{renders} <- elAttr "div" ("class" =: "pad10" <> "style" =: grid "2" "2") $
+         viewer (ViewerConfig { renderMarkdown = contentUpdates })
+    sourceMap <- holdDyn mempty (snd <$> renders)
   return ()
 
 viewerCss :: Text.Text
