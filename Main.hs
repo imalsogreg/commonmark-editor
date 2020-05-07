@@ -4,7 +4,7 @@
 
 module Main where
 
-import           Commonmark.Editor
+import           Commonmark.App
 import           Reflex.Dom        (MonadWidget, mainWidget, mainWidgetWithHead,
                                     text)
 
