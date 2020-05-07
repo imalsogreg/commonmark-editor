@@ -23,6 +23,7 @@ library
                , commonmark-extensions
                , lens
                , async
+               , containers
                , jsaddle
                , jsaddle-dom
                , parsec
@@ -34,6 +35,8 @@ library
      build-depends: jsaddle-warp
   hs-source-dirs: src
   exposed-modules: Commonmark.Editor
+                   Commonmark.Viewer
+                   Commonmark.App
 
 executable commonmark-editor
   main-is:             Main.hs
