@@ -24,6 +24,7 @@ library
                , lens
                , async
                , containers
+               , ghcjs-dom
                , jsaddle
                , ghcjs-dom
                , parsec

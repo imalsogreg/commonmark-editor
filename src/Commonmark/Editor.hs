@@ -35,8 +35,8 @@ import qualified Control.Monad.Fix                      as Fix
 import qualified Control.Monad.IO.Class                 as IO
 import qualified Data.Text                              as Text
 import qualified Data.Text.Lazy                         as T
-import qualified GHCJS.DOM.HTMLTextAreaElement              as DOM
-import qualified GHCJS.DOM.HTMLElement              as DOM
+import qualified GHCJS.DOM.HTMLTextAreaElement          as DOM
+import qualified GHCJS.DOM.HTMLElement                  as DOM
 import qualified Language.Javascript.JSaddle            as JSaddle
 import           Reflex.Dom.Core
 
