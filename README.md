@@ -5,7 +5,7 @@ A reflex app using commonmark-hs to render markdown into html
 *ghc*
 ``` sh
 path/to/reflex-platform/scripts/work-on ./ghc-env.nix ./.
-ghcid --command "cabal repl" -T "Commonmark.Editor.debug"
+ghcid --command "cabal repl" -T "Commonmark.App.debug"
 ```
 
 *ghcjs*

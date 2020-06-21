@@ -87,6 +87,7 @@ mainApp = divClass "content" $ do
         , ";"
         ]
   elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "1") (text "Markdown")
+
   rec
     e@Editor {contentUpdates} <- elAttr "div"
       ("class" =: "pad10" <>
@@ -96,11 +97,16 @@ mainApp = divClass "content" $ do
       display $ cursorN e
       display $ cursorXY e
       return e
+
     elAttr "div" ("class" =: "pad10" <> "style" =: grid "1" "2") (text "Rendered")
     Viewer{renders,elClicks} <- elAttr "div" ("class" =: "pad10" <> "style" =: grid "2" "2") $
-         viewer (ViewerConfig { renderMarkdown = contentUpdates, initialMarkdown = "" })
+         viewer (ViewerConfig { renderMarkdown = contentUpdates, initialMarkdown = "", renderSpec = syntax})
          (Just <$> cursorXY e)
     sourceMap <- holdDyn mempty (snd <$> renders)
+
+    syntax <- elAttr "div" ("class" =: "pad10" <> "style" =: grid "3" "1") $
+      customSyntaxPicker
+
   return ()
 
 viewerCss :: Text.Text

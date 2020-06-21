@@ -15,6 +15,7 @@
 module Commonmark.Viewer where
 
 import qualified Commonmark
+import Data.Bool (bool)
 import Control.Arrow
 import qualified Data.Map as Map
 import Data.Proxy (Proxy(..))
@@ -41,14 +42,65 @@ import qualified Language.Javascript.JSaddle            as JSaddle
 import           Reflex.Dom.Core
 
 data ViewerConfig t = ViewerConfig
-  { renderMarkdown :: Event t Text.Text
+  { renderMarkdown  :: Event t Text.Text
   , initialMarkdown :: Text.Text
+  , renderSpec      :: Dynamic t Spec
   }
 
+type RenderedHtml = Commonmark.Html.Html Commonmark.SourceRange
+type Spec         =
+  Commonmark.SyntaxSpec (Either Commonmark.ParseError) RenderedHtml RenderedHtml
 
+customSyntaxPicker
+  :: ( DomBuilder t m
+     , MonadHold t m
+     , PostBuild t m
+     , Fix.MonadFix m
+     , DomBuilderSpace m ~ GhcjsDomSpace
+     ) => m (Dynamic t Spec)
+customSyntaxPicker = divClass "syntax-picker" $ do
+  syntaxes <- Monad.forM syntaxOptions $ \(name,spec) -> do
+    rec
+      (e,_) <- elDynAttr' "div" (bool mempty ("style" =: "background-color:lightblue;") <$> selected) (text name)
+      selected <- toggle False (domEvent Click e)
+    return $ (bool mempty spec) <$> selected
+  return $ fmap (mconcat) $ sequence syntaxes
+  where
+    syntaxOptions =
+      [("smart",    Commonmark.smartPunctuationSpec)
+      ,("hard_line_breaks", Commonmark.hardLineBreaksSpec)
+      ,("fancy_list", Commonmark.fancyListSpec)
+      ,("implicit_heading_references", Commonmark.implicitHeadingReferencesSpec)
+      ,("pipe_table", Commonmark.pipeTableSpec)
+      ,("definition_list", Commonmark.definitionListSpec)
+      ,("strikethrough", Commonmark.strikethroughSpec)
+      ,("superscript", Commonmark.superscriptSpec)
+      ,("subscript", Commonmark.subscriptSpec)
+      -- ,("emoji", Commonmark.emojiSpec)  -- This breaks linking under ghcjs
+      ,("attributes", Commonmark.attributesSpec)
+      ,("fenced_div", Commonmark.fencedDivSpec)
+      ,("bracketed_span", Commonmark.bracketedSpanSpec)
+      ,("raw_attribute", Commonmark.rawAttributeSpec)
+      ,("auto_identifiers", Commonmark.autoIdentifiersSpec)
+      ,("auto_identifiers_ascii", Commonmark.autoIdentifiersAsciiSpec)
+      ,("autolink", Commonmark.autolinkSpec)
+      ,("math",     Commonmark.mathSpec)
+      ,("footnote", Commonmark.footnoteSpec)
+      ,("task_lists", Commonmark.taskListSpec)
+      ,("default",  Commonmark.defaultSyntaxSpec)
+      ]
+
+
+customSyntax
+  :: ( Monad m
+     , Commonmark.IsBlock il bl
+     , Commonmark.HasMath il
+     ) => Commonmark.SyntaxSpec m il bl
 customSyntax = mconcat
   [ Commonmark.mathSpec
   -- , Commonmark.emojiSpec  -- TODO: emojiSpec causes linking to hang
+  , Commonmark.smartPunctuationSpec
+  , Commonmark.autolinkSpec
   , Commonmark.defaultSyntaxSpec
   ]
 
@@ -67,6 +119,16 @@ render
 render t =
   fmap (,mempty) $ Monad.join $ Commonmark.commonmarkWith customSyntax "editor-text" t
 
+render'
+  :: (
+       Commonmark.IsBlock il (Commonmark.Html.Html Commonmark.SourceRange)
+     , Commonmark.HasMath il
+     ) => Commonmark.SyntaxSpec (Either Commonmark.ParseError) il (Commonmark.Html.Html Commonmark.SourceRange)
+       -> Text.Text
+       -> Either Commonmark.ParseError ((Commonmark.Html Commonmark.SourceRange, Commonmark.SourceMap))
+render' spec t =
+  fmap (,mempty) $ Monad.join $ Commonmark.commonmarkWith spec "editor-text" t
+
   -- Commonmark.runWithSourceMap <$> Identity.runIdentity (Commonmark.parseCommonmarkWith customSyntax (Commonmark.tokenize "editor-text" t))
 
 
@@ -77,7 +139,7 @@ render t =
 --   on each change into an invisible div, and ramp up opacity
 --   after MathJax is done
 viewer
-  :: forall t m
+  :: forall t m il
   .( DomBuilder t m
    , TriggerEvent t m
    , PerformEvent t m
@@ -86,17 +148,19 @@ viewer
    , IO.MonadIO m
    , Fix.MonadFix m
    , IO.MonadIO (Performable m)
+   , DomBuilderSpace m ~ GhcjsDomSpace
    , JSaddle.MonadJSM (Performable m)
+   , Commonmark.IsBlock il (Commonmark.Html.Html Commonmark.SourceRange)
    )
   => ViewerConfig t
   -> Dynamic t (Maybe (Int,Int))
   -> m (Viewer t)
-viewer ViewerConfig{renderMarkdown, initialMarkdown} cursorPos = divClass "commonmark-viewer" $ do
+viewer ViewerConfig{renderMarkdown, initialMarkdown, renderSpec} cursorPos = divClass "commonmark-viewer" $ do
   -- TODO: debounce? throttle?
   let initialHtml = render initialMarkdown
-  -- html <- (fmap.fmap)  render $ debounce 0.5 =<< throttle 0.2 renderMarkdown
-  html <- (fmap.fmap) render $ throttle 0.5 renderMarkdown
-  numberedHtmls <- numberOccurrences html
+  markdown <- holdDyn initialMarkdown =<< throttle 0.5 renderMarkdown
+  let html = render' <$> renderSpec <*> markdown
+  numberedHtmls <- numberOccurrences (updated html)
   let
 
     -- drawFrame (Right (Commonmark.HtmlNull, _)) = text "(no content)" >> return never
