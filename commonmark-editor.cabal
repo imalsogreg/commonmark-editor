@@ -9,7 +9,7 @@ version:             0.1.0.0
 -- description:
 -- bug-reports:
 license:             BSD3
-license-file:        LICENSE
+license-file:        LICENSE.md
 author:              Greg Hale
 maintainer:          imalsogreg@gmail.com
 -- copyright:
